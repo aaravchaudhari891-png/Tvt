@@ -1,17 +1,21 @@
 -- SERVICES
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 -- SETTINGS
-local TRACK_RANGE = 300 -- studs
-local SMOOTHNESS = 0.15 -- lower = smoother
+local TRACK_RANGE = 300
+local SMOOTHNESS = 0.15
 
 -- STATE
 local trackingEnabled = false
 local targetCharacter = nil
+local dragging = false
+local dragStart
+local startPos
 
 -- ===== UI =====
 local gui = Instance.new("ScreenGui")
@@ -19,8 +23,8 @@ gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 140, 0, 50)
-button.Position = UDim2.new(0, 20, 1, -80)
+button.Size = UDim2.new(0, 150, 0, 55)
+button.Position = UDim2.new(0, 20, 0.7, 0)
 button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 button.TextColor3 = Color3.fromRGB(255, 255, 255)
 button.Text = "Tracking: OFF"
@@ -28,23 +32,54 @@ button.TextScaled = true
 button.BorderSizePixel = 0
 button.Parent = gui
 
-button.CornerRadius = UDim.new(0, 12)
-Instance.new("UICorner", button)
+Instance.new("UICorner", button).CornerRadius = UDim.new(0, 14)
+
+-- ===== DRAGGING (MOBILE + PC) =====
+button.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch
+	or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		startPos = button.Position
+	end
+end)
+
+button.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch
+	or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (
+		input.UserInputType == Enum.UserInputType.Touch
+		or input.UserInputType == Enum.UserInputType.MouseMovement
+	) then
+		local delta = input.Position - dragStart
+		button.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+	end
+end)
 
 -- ===== FIND NEAREST PLAYER =====
 local function getNearestPlayer()
-	local closest = nil
+	local closest
 	local shortest = TRACK_RANGE
 
 	for _, plr in pairs(Players:GetPlayers()) do
 		if plr ~= player and plr.Character then
 			local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-			local humanoid = plr.Character:FindFirstChildOfClass("Humanoid")
+			local hum = plr.Character:FindFirstChildOfClass("Humanoid")
 
-			if hrp and humanoid and humanoid.Health > 0 then
-				local distance = (hrp.Position - camera.CFrame.Position).Magnitude
-				if distance < shortest then
-					shortest = distance
+			if hrp and hum and hum.Health > 0 then
+				local dist = (hrp.Position - camera.CFrame.Position).Magnitude
+				if dist < shortest then
+					shortest = dist
 					closest = plr.Character
 				end
 			end
@@ -54,13 +89,14 @@ local function getNearestPlayer()
 	return closest
 end
 
--- ===== BUTTON TOGGLE =====
+-- ===== TOGGLE TRACKING =====
 button.Activated:Connect(function()
 	trackingEnabled = not trackingEnabled
 
 	if trackingEnabled then
 		button.Text = "Tracking: ON"
 		button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+		targetCharacter = getNearestPlayer()
 	else
 		button.Text = "Tracking: OFF"
 		button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
@@ -80,9 +116,8 @@ RunService.RenderStepped:Connect(function()
 		local hrp = targetCharacter:FindFirstChild("HumanoidRootPart")
 		if hrp then
 			local current = camera.CFrame
-			local targetCF = CFrame.new(camera.CFrame.Position, hrp.Position)
-
-			camera.CFrame = current:Lerp(targetCF, SMOOTHNESS)
+			local target = CFrame.new(camera.CFrame.Position, hrp.Position)
+			camera.CFrame = current:Lerp(target, SMOOTHNESS)
 		end
 	end
 end)
