@@ -10,12 +10,14 @@ local camera = Workspace.CurrentCamera
 -- SETTINGS
 local MAX_DISTANCE = 300
 local LOS_BREAK_TIME = 2
-local SMOOTHNESS = 0.08
+
+local SMOOTHNESS = 0.18      -- base smooth speed
+local LOCK_STRENGTH = 6      -- extra pull force
 
 -- UI
 local gui = Instance.new("ScreenGui")
 gui.Name = "UltimateLockUI"
-gui.ResetOnSpawn = false -- UI NEVER DISAPPEARS
+gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local button = Instance.new("TextButton")
@@ -28,7 +30,7 @@ button.Font = Enum.Font.SourceSansBold
 button.TextSize = 18
 button.Parent = gui
 
--- DRAGGING (PC + MOBILE)
+-- DRAG (PC + MOBILE)
 local dragging = false
 local dragStart, startPos
 
@@ -69,7 +71,7 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- ESP HIGHLIGHT
+-- ESP
 local highlight = Instance.new("Highlight")
 highlight.FillColor = Color3.fromRGB(255, 0, 0)
 highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
@@ -77,7 +79,7 @@ highlight.FillTransparency = 0.5
 highlight.Enabled = false
 highlight.Parent = gui
 
--- LINE OF SIGHT CHECK
+-- LINE OF SIGHT
 local function hasLOS(targetRoot)
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
@@ -99,7 +101,7 @@ local function hasLOS(targetRoot)
 	return Workspace:Raycast(origin, direction, params) == nil
 end
 
--- FIND NEAREST VISIBLE PLAYER
+-- FIND TARGET
 local function getNearestVisiblePlayer()
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
@@ -127,14 +129,14 @@ local function getNearestVisiblePlayer()
 	return closest
 end
 
--- TRACKING STATE
+-- STATE
 local tracking = false
 local lockedTarget = nil
 local losTimer = 0
 local connection
 local normalCameraType = camera.CameraType
 
--- TOGGLE BUTTON
+-- TOGGLE
 button.MouseButton1Click:Connect(function()
 	tracking = not tracking
 
@@ -160,7 +162,10 @@ button.MouseButton1Click:Connect(function()
 
 				local camPos = camera.CFrame.Position
 				local desired = CFrame.new(camPos, lockedTarget.Position)
-				camera.CFrame = camera.CFrame:Lerp(desired, SMOOTHNESS)
+
+				-- 🔥 STRONG LOCK MATH
+				local alpha = 1 - math.exp(-SMOOTHNESS * LOCK_STRENGTH * dt * 60)
+				camera.CFrame = camera.CFrame:Lerp(desired, alpha)
 			else
 				highlight.Enabled = false
 				losTimer += dt
