@@ -6,25 +6,27 @@ local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- GUI Setup
+-- Smoothness (lower = smoother, higher = faster)
+local SMOOTHNESS = 0.08
+
+-- UI
 local gui = Instance.new("ScreenGui")
-gui.Name = "TrackerGui"
+gui.Name = "SmoothLockUI"
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 180, 0, 50)
-button.Position = UDim2.new(0.05, 0, 0.5, 0)
+button.Size = UDim2.new(0, 210, 0, 50)
+button.Position = UDim2.new(0.05, 0, 0.45, 0)
 button.Text = "Tracking: OFF"
-button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
 button.TextColor3 = Color3.fromRGB(255, 255, 255)
 button.Font = Enum.Font.SourceSansBold
 button.TextSize = 18
 button.Parent = gui
 
--- Make button draggable
+-- Draggable button
 local dragging = false
-local dragStart
-local startPos
+local dragStart, startPos
 
 button.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -54,63 +56,73 @@ end)
 
 -- Tracking logic
 local tracking = false
-local trackConnection
-local defaultCameraType = camera.CameraType
+local lockedTarget = nil
+local connection
+local normalCameraType = camera.CameraType
 
-local function getNearestPlayer()
-	local character = player.Character
-	if not character or not character:FindFirstChild("HumanoidRootPart") then
+local function getNearestOtherPlayer()
+	local char = player.Character
+	if not char or not char:FindFirstChild("HumanoidRootPart") then
 		return nil
 	end
 
-	local myPos = character.HumanoidRootPart.Position
-	local closestPlayer = nil
-	local closestDistance = math.huge
+	local myPos = char.HumanoidRootPart.Position
+	local nearest, shortest = nil, math.huge
 
-	for _, otherPlayer in pairs(Players:GetPlayers()) do
-		if otherPlayer ~= player then
-			local otherChar = otherPlayer.Character
-			if otherChar and otherChar:FindFirstChild("HumanoidRootPart") then
-				local dist = (otherChar.HumanoidRootPart.Position - myPos).Magnitude
-				if dist < closestDistance then
-					closestDistance = dist
-					closestPlayer = otherChar.HumanoidRootPart
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= player then
+			local c = plr.Character
+			if c and c:FindFirstChild("HumanoidRootPart") then
+				local dist = (c.HumanoidRootPart.Position - myPos).Magnitude
+				if dist < shortest then
+					shortest = dist
+					nearest = c.HumanoidRootPart
 				end
 			end
 		end
 	end
 
-	return closestPlayer
+	return nearest
 end
 
--- Button click toggle
+-- Toggle button
 button.MouseButton1Click:Connect(function()
 	tracking = not tracking
 
 	if tracking then
+		lockedTarget = getNearestOtherPlayer()
+
+		if not lockedTarget then
+			button.Text = "No player found"
+			tracking = false
+			return
+		end
+
 		button.Text = "Tracking: ON"
-		button.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+		button.BackgroundColor3 = Color3.fromRGB(60, 200, 60)
 
 		camera.CameraType = Enum.CameraType.Scriptable
 
-		trackConnection = RunService.RenderStepped:Connect(function()
-			local target = getNearestPlayer()
-			if target then
-				camera.CFrame = CFrame.new(
-					camera.CFrame.Position,
-					target.Position
-				)
+		connection = RunService.RenderStepped:Connect(function()
+			if lockedTarget and lockedTarget.Parent then
+				local camPos = camera.CFrame.Position
+				local targetPos = lockedTarget.Position
+
+				local desiredCFrame = CFrame.new(camPos, targetPos)
+				camera.CFrame = camera.CFrame:Lerp(desiredCFrame, SMOOTHNESS)
 			end
 		end)
 	else
-		button.Text = "Tracking: OFF (no no)"
-		button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+		button.Text = "no no"
+		button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
 
-		if trackConnection then
-			trackConnection:Disconnect()
-			trackConnection = nil
+		lockedTarget = nil
+
+		if connection then
+			connection:Disconnect()
+			connection = nil
 		end
 
-		camera.CameraType = defaultCameraType
+		camera.CameraType = normalCameraType
 	end
 end)
