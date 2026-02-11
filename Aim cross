@@ -2,20 +2,21 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
+local camera = Workspace.CurrentCamera
 
--- Smoothness (lower = smoother, higher = faster)
+-- Smoothness
 local SMOOTHNESS = 0.08
 
 -- UI
 local gui = Instance.new("ScreenGui")
-gui.Name = "SmoothLockUI"
+gui.Name = "LOSLockUI"
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 210, 0, 50)
+button.Size = UDim2.new(0, 220, 0, 50)
 button.Position = UDim2.new(0.05, 0, 0.45, 0)
 button.Text = "Tracking: OFF"
 button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
@@ -54,68 +55,92 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- Tracking logic
-local tracking = false
-local lockedTarget = nil
-local connection
-local normalCameraType = camera.CameraType
+-- Line of sight check
+local function hasLineOfSight(targetRoot)
+	local myChar = player.Character
+	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
+		return false
+	end
 
-local function getNearestOtherPlayer()
-	local char = player.Character
-	if not char or not char:FindFirstChild("HumanoidRootPart") then
+	local origin = myChar.HumanoidRootPart.Position
+	local direction = targetRoot.Position - origin
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+	params.FilterDescendantsInstances = {myChar, targetRoot.Parent}
+	params.IgnoreWater = true
+
+	local result = Workspace:Raycast(origin, direction, params)
+
+	-- If ray hits nothing, or directly hits the target, LOS is clear
+	return result == nil
+end
+
+-- Find nearest visible player
+local function getNearestVisiblePlayer()
+	local myChar = player.Character
+	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
 		return nil
 	end
 
-	local myPos = char.HumanoidRootPart.Position
-	local nearest, shortest = nil, math.huge
+	local myPos = myChar.HumanoidRootPart.Position
+	local closest, shortest = nil, math.huge
 
 	for _, plr in pairs(Players:GetPlayers()) do
 		if plr ~= player then
-			local c = plr.Character
-			if c and c:FindFirstChild("HumanoidRootPart") then
-				local dist = (c.HumanoidRootPart.Position - myPos).Magnitude
-				if dist < shortest then
+			local char = plr.Character
+			if char and char:FindFirstChild("HumanoidRootPart") then
+				local root = char.HumanoidRootPart
+				local dist = (root.Position - myPos).Magnitude
+
+				if dist < shortest and hasLineOfSight(root) then
 					shortest = dist
-					nearest = c.HumanoidRootPart
+					closest = root
 				end
 			end
 		end
 	end
 
-	return nearest
+	return closest
 end
 
--- Toggle button
+-- Tracking
+local tracking = false
+local lockedTarget = nil
+local connection
+local normalCameraType = camera.CameraType
+
 button.MouseButton1Click:Connect(function()
 	tracking = not tracking
 
 	if tracking then
-		lockedTarget = getNearestOtherPlayer()
+		lockedTarget = getNearestVisiblePlayer()
 
 		if not lockedTarget then
-			button.Text = "No player found"
+			button.Text = "No visible player"
 			tracking = false
 			return
 		end
 
 		button.Text = "Tracking: ON"
 		button.BackgroundColor3 = Color3.fromRGB(60, 200, 60)
-
 		camera.CameraType = Enum.CameraType.Scriptable
 
 		connection = RunService.RenderStepped:Connect(function()
 			if lockedTarget and lockedTarget.Parent then
-				local camPos = camera.CFrame.Position
-				local targetPos = lockedTarget.Position
+				-- Stop tracking if object blocks view
+				if not hasLineOfSight(lockedTarget) then
+					return
+				end
 
-				local desiredCFrame = CFrame.new(camPos, targetPos)
-				camera.CFrame = camera.CFrame:Lerp(desiredCFrame, SMOOTHNESS)
+				local camPos = camera.CFrame.Position
+				local desired = CFrame.new(camPos, lockedTarget.Position)
+				camera.CFrame = camera.CFrame:Lerp(desired, SMOOTHNESS)
 			end
 		end)
 	else
 		button.Text = "no no"
 		button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-
 		lockedTarget = nil
 
 		if connection then
