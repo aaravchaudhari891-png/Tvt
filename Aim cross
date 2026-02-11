@@ -1,4 +1,4 @@
--- SERVICES
+--// SERVICES
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -7,7 +7,7 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
--- SETTINGS
+--// SETTINGS
 local MAX_DISTANCE = 300
 local LOS_BREAK_TIME = 2
 
@@ -15,7 +15,7 @@ local PREDICTION_STRENGTH = 0.12
 local SOFT_LOCK_STRENGTH = 5
 local HARD_LOCK_STRENGTH = 12
 
--- STATE
+--// STATE
 local tracking = false
 local hardLock = false
 local lockedTarget = nil
@@ -23,46 +23,70 @@ local losTimer = 0
 local connection
 local normalCameraType = camera.CameraType
 
--- UI
+--// UI CREATION
 local gui = Instance.new("ScreenGui")
-gui.Name = "AdvancedLockUI"
+gui.Name = "PeilHubUI"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
-local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 260, 0, 50)
-button.Position = UDim2.new(0.05, 0, 0.45, 0)
-button.Text = "Tracking: OFF"
-button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-button.TextColor3 = Color3.fromRGB(255,255,255)
-button.Font = Enum.Font.SourceSansBold
-button.TextSize = 18
-button.Parent = gui
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 350, 0, 300)
+mainFrame.Position = UDim2.new(0.5, -175, 0.5, -150)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+mainFrame.Parent = gui
+mainFrame.Active = true
 
--- Right click to toggle Hard Lock
-button.MouseButton2Click:Connect(function()
-	hardLock = not hardLock
-	if hardLock then
-		button.Text = "Hard Lock Mode"
-	else
-		button.Text = tracking and "Tracking: ON" or "Tracking: OFF"
-	end
-end)
+local corner = Instance.new("UICorner", mainFrame)
+corner.CornerRadius = UDim.new(0,12)
 
--- DRAG (PC + MOBILE)
-local dragging = false
-local dragStart, startPos
+-- Title
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1,0,0,60)
+title.BackgroundTransparency = 1
+title.Text = "PEILHUB"
+title.Font = Enum.Font.GothamBlack
+title.TextScaled = true
+title.TextColor3 = Color3.fromRGB(0,255,120)
+title.Parent = mainFrame
 
-button.InputBegan:Connect(function(input)
+-- Divider
+local divider = Instance.new("Frame")
+divider.Size = UDim2.new(1,-40,0,2)
+divider.Position = UDim2.new(0,20,0,60)
+divider.BackgroundColor3 = Color3.fromRGB(0,255,120)
+divider.Parent = mainFrame
+
+-- Button Creator
+local function createButton(text, yPos)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1,-40,0,50)
+	btn.Position = UDim2.new(0,20,0,yPos)
+	btn.Text = text
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 18
+	btn.TextColor3 = Color3.fromRGB(255,255,255)
+	btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+	btn.Parent = mainFrame
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0,8)
+	return btn
+end
+
+local toggleLockBtn = createButton("Lock: OFF", 80)
+local hardLockBtn = createButton("Hard Lock: OFF", 150)
+
+--// DRAGGING
+local dragging, dragStart, startPos
+
+mainFrame.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1
 	or input.UserInputType == Enum.UserInputType.Touch then
 		dragging = true
 		dragStart = input.Position
-		startPos = button.Position
+		startPos = mainFrame.Position
 	end
 end)
 
-button.InputEnded:Connect(function(input)
+mainFrame.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1
 	or input.UserInputType == Enum.UserInputType.Touch then
 		dragging = false
@@ -73,7 +97,7 @@ UserInputService.InputChanged:Connect(function(input)
 	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
 	or input.UserInputType == Enum.UserInputType.Touch) then
 		local delta = input.Position - dragStart
-		button.Position = UDim2.new(
+		mainFrame.Position = UDim2.new(
 			startPos.X.Scale,
 			startPos.X.Offset + delta.X,
 			startPos.Y.Scale,
@@ -82,14 +106,14 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- ESP
+--// ESP
 local highlight = Instance.new("Highlight")
 highlight.FillColor = Color3.fromRGB(255,0,0)
 highlight.FillTransparency = 0.5
 highlight.Enabled = false
 highlight.Parent = gui
 
--- LOS
+--// LINE OF SIGHT
 local function hasLOS(targetRoot)
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
@@ -110,7 +134,7 @@ local function hasLOS(targetRoot)
 	return Workspace:Raycast(origin, direction, params) == nil
 end
 
--- Find nearest
+--// FIND TARGET
 local function getNearestVisiblePlayer()
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
@@ -137,68 +161,79 @@ local function getNearestVisiblePlayer()
 	return closest
 end
 
--- TOGGLE LOCK
-button.MouseButton1Click:Connect(function()
+--// LOCK SYSTEM
+local function startTracking()
+	camera.CameraType = Enum.CameraType.Scriptable
+
+	connection = RunService.RenderStepped:Connect(function(dt)
+
+		if not lockedTarget then
+			lockedTarget = getNearestVisiblePlayer()
+			if lockedTarget then
+				highlight.Adornee = lockedTarget.Parent
+				highlight.Enabled = true
+				losTimer = 0
+			end
+			return
+		end
+
+		if hasLOS(lockedTarget) then
+			losTimer = 0
+			highlight.Enabled = true
+
+			-- Prediction
+			local predicted = lockedTarget.Position + (lockedTarget.Velocity * PREDICTION_STRENGTH)
+
+			local camPos = camera.CFrame.Position
+			local desired = CFrame.new(camPos, predicted)
+
+			local strength = hardLock and HARD_LOCK_STRENGTH or SOFT_LOCK_STRENGTH
+			local alpha = 1 - math.exp(-strength * dt * 10)
+
+			camera.CFrame = camera.CFrame:Lerp(desired, alpha)
+		else
+			highlight.Enabled = false
+			losTimer += dt
+			if losTimer >= LOS_BREAK_TIME then
+				lockedTarget = nil
+			end
+		end
+	end)
+end
+
+local function stopTracking()
+	if connection then
+		connection:Disconnect()
+		connection = nil
+	end
+	camera.CameraType = normalCameraType
+	lockedTarget = nil
+	highlight.Enabled = false
+	highlight.Adornee = nil
+end
+
+--// BUTTON EVENTS
+toggleLockBtn.MouseButton1Click:Connect(function()
 	tracking = not tracking
 
 	if tracking then
-		button.Text = "Tracking: ON"
-		button.BackgroundColor3 = Color3.fromRGB(60,200,60)
-		camera.CameraType = Enum.CameraType.Scriptable
-
-		connection = RunService.RenderStepped:Connect(function(dt)
-
-			if not lockedTarget then
-				lockedTarget = getNearestVisiblePlayer()
-				if lockedTarget then
-					highlight.Adornee = lockedTarget.Parent
-					highlight.Enabled = true
-					losTimer = 0
-				end
-				return
-			end
-
-			if hasLOS(lockedTarget) then
-				losTimer = 0
-				highlight.Enabled = true
-
-				-- 🎯 PREDICTION
-				local predictedPosition = lockedTarget.Position
-				if lockedTarget.Parent:FindFirstChild("HumanoidRootPart") then
-					local velocity = lockedTarget.Velocity
-					predictedPosition += velocity * PREDICTION_STRENGTH
-				end
-
-				local camPos = camera.CFrame.Position
-				local desired = CFrame.new(camPos, predictedPosition)
-
-				-- 🧲 LOCK STRENGTH
-				local strength = hardLock and HARD_LOCK_STRENGTH or SOFT_LOCK_STRENGTH
-				local alpha = 1 - math.exp(-strength * dt * 10)
-
-				camera.CFrame = camera.CFrame:Lerp(desired, alpha)
-			else
-				highlight.Enabled = false
-				losTimer += dt
-				if losTimer >= LOS_BREAK_TIME then
-					lockedTarget = nil
-				end
-			end
-		end)
-
+		toggleLockBtn.Text = "Lock: ON"
+		toggleLockBtn.BackgroundColor3 = Color3.fromRGB(0,200,100)
+		startTracking()
 	else
-		button.Text = "no no"
-		button.BackgroundColor3 = Color3.fromRGB(200,60,60)
+		toggleLockBtn.Text = "Lock: OFF"
+		toggleLockBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+		stopTracking()
+	end
+end)
 
-		lockedTarget = nil
-		highlight.Enabled = false
-		highlight.Adornee = nil
-
-		if connection then
-			connection:Disconnect()
-			connection = nil
-		end
-
-		camera.CameraType = normalCameraType
+hardLockBtn.MouseButton1Click:Connect(function()
+	hardLock = not hardLock
+	if hardLock then
+		hardLockBtn.Text = "Hard Lock: ON"
+		hardLockBtn.BackgroundColor3 = Color3.fromRGB(200,0,0)
+	else
+		hardLockBtn.Text = "Hard Lock: OFF"
+		hardLockBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
 	end
 end)
