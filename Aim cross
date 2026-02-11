@@ -2,74 +2,37 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 
 --// SETTINGS
-local MAX_DISTANCE = 300
-local SAVE_KEY = "PeilHub_Position"
+local MAX_DISTANCE = 250
+local SMOOTH_SPEED = 5
 
 --// STATE
-local targets = {}
-local currentIndex = 0
 local selectedTarget = nil
-local healthConnection
-local dragStart, startPos, dragging
+local cinematicMode = false
+local connection
 
---// GUI
+--// UI SETUP
 local gui = Instance.new("ScreenGui")
 gui.Name = "PeilHubUI"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 420, 0, 380)
-mainFrame.BackgroundColor3 = Color3.fromRGB(18,18,18)
+mainFrame.Size = UDim2.new(0, 400, 0, 340)
+mainFrame.Position = UDim2.new(0.5, -200, 0.5, -170)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20,20,20)
 mainFrame.Parent = gui
 mainFrame.Active = true
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0,16)
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0,12)
 
--- Load Saved Position
-pcall(function()
-	local saved = UserSettings():GetService("UserGameSettings"):GetPropertyChangedSignal(SAVE_KEY)
-end)
-
-mainFrame.Position = UDim2.new(0.5,-210,0.5,-190)
-
---// DRAGGING
-mainFrame.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-	or input.UserInputType == Enum.UserInputType.Touch then
-		dragging = true
-		dragStart = input.Position
-		startPos = mainFrame.Position
-	end
-end)
-
-mainFrame.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-	or input.UserInputType == Enum.UserInputType.Touch then
-		dragging = false
-	end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-	or input.UserInputType == Enum.UserInputType.Touch) then
-		local delta = input.Position - dragStart
-		mainFrame.Position = UDim2.new(
-			startPos.X.Scale,
-			startPos.X.Offset + delta.X,
-			startPos.Y.Scale,
-			startPos.Y.Offset + delta.Y
-		)
-	end
-end)
-
---// TITLE WITH GLOW
+-- Title
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1,0,0,70)
+title.Size = UDim2.new(1,0,0,60)
 title.BackgroundTransparency = 1
 title.Text = "PEILHUB"
 title.Font = Enum.Font.GothamBlack
@@ -77,26 +40,34 @@ title.TextScaled = true
 title.TextColor3 = Color3.fromRGB(0,255,120)
 title.Parent = mainFrame
 
--- Glow animation
-task.spawn(function()
-	while true do
-		TweenService:Create(title, TweenInfo.new(1), {TextColor3 = Color3.fromRGB(0,200,255)}):Play()
-		task.wait(1)
-		TweenService:Create(title, TweenInfo.new(1), {TextColor3 = Color3.fromRGB(0,255,120)}):Play()
-		task.wait(1)
-	end
-end)
+-- Button Creator
+local function createButton(text, y)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1,-40,0,50)
+	btn.Position = UDim2.new(0,20,0,y)
+	btn.Text = text
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 18
+	btn.TextColor3 = Color3.new(1,1,1)
+	btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+	btn.Parent = mainFrame
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0,8)
+	return btn
+end
 
--- Info Panel
+local selectBtn = createButton("Select Nearest Player", 80)
+local cameraBtn = createButton("Cinematic Camera: OFF", 150)
+
+-- Target Info Panel
 local infoFrame = Instance.new("Frame")
-infoFrame.Size = UDim2.new(1,-40,0,150)
-infoFrame.Position = UDim2.new(0,20,0,100)
-infoFrame.BackgroundColor3 = Color3.fromRGB(28,28,28)
+infoFrame.Size = UDim2.new(1,-40,0,100)
+infoFrame.Position = UDim2.new(0,20,0,230)
+infoFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
 infoFrame.Parent = mainFrame
-Instance.new("UICorner", infoFrame).CornerRadius = UDim.new(0,12)
+Instance.new("UICorner", infoFrame).CornerRadius = UDim.new(0,8)
 
 local nameLabel = Instance.new("TextLabel")
-nameLabel.Size = UDim2.new(1,0,0.4,0)
+nameLabel.Size = UDim2.new(1,0,0.5,0)
 nameLabel.BackgroundTransparency = 1
 nameLabel.Text = "Target: None"
 nameLabel.Font = Enum.Font.GothamBold
@@ -104,95 +75,95 @@ nameLabel.TextScaled = true
 nameLabel.TextColor3 = Color3.new(1,1,1)
 nameLabel.Parent = infoFrame
 
--- Health Bar Background
-local healthBG = Instance.new("Frame")
-healthBG.Size = UDim2.new(0.9,0,0.25,0)
-healthBG.Position = UDim2.new(0.05,0,0.6,0)
-healthBG.BackgroundColor3 = Color3.fromRGB(50,50,50)
-healthBG.Parent = infoFrame
-Instance.new("UICorner", healthBG).CornerRadius = UDim.new(1,0)
+local healthLabel = Instance.new("TextLabel")
+healthLabel.Size = UDim2.new(1,0,0.5,0)
+healthLabel.Position = UDim2.new(0,0,0.5,0)
+healthLabel.BackgroundTransparency = 1
+healthLabel.Text = "Health: --"
+healthLabel.Font = Enum.Font.Gotham
+healthLabel.TextScaled = true
+healthLabel.TextColor3 = Color3.fromRGB(0,255,120)
+healthLabel.Parent = infoFrame
 
--- Health Fill
-local healthFill = Instance.new("Frame")
-healthFill.Size = UDim2.new(1,0,1,0)
-healthFill.BackgroundColor3 = Color3.fromRGB(0,255,120)
-healthFill.Parent = healthBG
-Instance.new("UICorner", healthFill).CornerRadius = UDim.new(1,0)
-
--- Highlight
-local highlight = Instance.new("Highlight")
-highlight.FillTransparency = 1
-highlight.OutlineColor = Color3.fromRGB(0,255,120)
-highlight.Enabled = false
-highlight.Parent = gui
-
---// GET TARGET LIST
-local function refreshTargets()
-	targets = {}
+--// FIND NEAREST PLAYER
+local function getNearestPlayer()
 	local myChar = player.Character
-	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return end
+	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+	
 	local myPos = myChar.HumanoidRootPart.Position
+	local closest, shortest = nil, math.huge
 	
 	for _, plr in pairs(Players:GetPlayers()) do
 		if plr ~= player and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-			local dist = (plr.Character.HumanoidRootPart.Position - myPos).Magnitude
-			if dist <= MAX_DISTANCE then
-				table.insert(targets, plr)
+			local root = plr.Character.HumanoidRootPart
+			local dist = (root.Position - myPos).Magnitude
+			
+			if dist < shortest and dist <= MAX_DISTANCE then
+				shortest = dist
+				closest = plr
 			end
 		end
 	end
+	
+	return closest
 end
 
-local function selectTarget(index)
-	if healthConnection then healthConnection:Disconnect() end
+--// SMOOTH CAMERA FOLLOW (NO AUTO AIM)
+local function startCinematic()
+	if connection then connection:Disconnect() end
 	
-	if #targets == 0 then
-		nameLabel.Text = "Target: None"
-		highlight.Enabled = false
-		return
-	end
+	connection = RunService.RenderStepped:Connect(function(dt)
+		if not selectedTarget then return end
+		if not selectedTarget.Character then return end
+		
+		local root = selectedTarget.Character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+		
+		local offset = root.CFrame.LookVector * -8 + Vector3.new(0,4,0)
+		local desiredPos = root.Position + offset
+		
+		local desiredCF = CFrame.new(desiredPos, root.Position)
+		
+		local alpha = 1 - math.exp(-SMOOTH_SPEED * dt * 10)
+		camera.CFrame = camera.CFrame:Lerp(desiredCF, alpha)
+	end)
+end
+
+local function stopCinematic()
+	if connection then connection:Disconnect() end
+end
+
+--// BUTTON EVENTS
+selectBtn.MouseButton1Click:Connect(function()
+	selectedTarget = getNearestPlayer()
 	
-	currentIndex = ((index - 1) % #targets) + 1
-	selectedTarget = targets[currentIndex]
-	
-	nameLabel.Text = "Target: "..selectedTarget.Name
-	highlight.Adornee = selectedTarget.Character
-	highlight.Enabled = true
-	
-	local humanoid = selectedTarget.Character:FindFirstChild("Humanoid")
-	if humanoid then
-		local function updateHealth()
-			local percent = humanoid.Health / humanoid.MaxHealth
-			TweenService:Create(healthFill, TweenInfo.new(0.2), {
-				Size = UDim2.new(percent,0,1,0)
-			}):Play()
+	if selectedTarget then
+		nameLabel.Text = "Target: " .. selectedTarget.Name
+		
+		local humanoid = selectedTarget.Character:FindFirstChild("Humanoid")
+		if humanoid then
+			healthLabel.Text = "Health: " .. math.floor(humanoid.Health)
+			
+			humanoid.HealthChanged:Connect(function()
+				healthLabel.Text = "Health: " .. math.floor(humanoid.Health)
+			end)
 		end
-		
-		updateHealth()
-		healthConnection = humanoid.HealthChanged:Connect(updateHealth)
-	end
-end
-
---// INPUT (Keyboard + Controller)
-UserInputService.InputBegan:Connect(function(input, gpe)
-	if gpe then return end
-	
-	if input.KeyCode == Enum.KeyCode.Q
-	or input.KeyCode == Enum.KeyCode.DPadLeft then
-		refreshTargets()
-		selectTarget(currentIndex - 1)
-		
-	elseif input.KeyCode == Enum.KeyCode.E
-	or input.KeyCode == Enum.KeyCode.DPadRight then
-		refreshTargets()
-		selectTarget(currentIndex + 1)
+	else
+		nameLabel.Text = "Target: None"
+		healthLabel.Text = "Health: --"
 	end
 end)
 
--- Respawn safety
-player.CharacterAdded:Connect(function()
-	highlight.Enabled = false
-	selectedTarget = nil
-	nameLabel.Text = "Target: None"
-	healthFill.Size = UDim2.new(1,0,1,0)
+cameraBtn.MouseButton1Click:Connect(function()
+	cinematicMode = not cinematicMode
+	
+	if cinematicMode then
+		cameraBtn.Text = "Cinematic Camera: ON"
+		cameraBtn.BackgroundColor3 = Color3.fromRGB(0,170,255)
+		startCinematic()
+	else
+		cameraBtn.Text = "Cinematic Camera: OFF"
+		cameraBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+		stopCinematic()
+	end
 end)
