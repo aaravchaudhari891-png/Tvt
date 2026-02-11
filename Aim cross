@@ -10,49 +10,62 @@ local camera = Workspace.CurrentCamera
 -- SETTINGS
 local MAX_DISTANCE = 300
 local LOS_BREAK_TIME = 2
-local SMOOTHNESS = 0.08
+
+local PREDICTION_STRENGTH = 0.12
+local SOFT_LOCK_STRENGTH = 5
+local HARD_LOCK_STRENGTH = 12
+
+-- STATE
+local tracking = false
+local hardLock = false
+local lockedTarget = nil
+local losTimer = 0
+local connection
+local normalCameraType = camera.CameraType
 
 -- UI
 local gui = Instance.new("ScreenGui")
-gui.Name = "UltimateLockUI"
-gui.ResetOnSpawn = false -- UI NEVER DISAPPEARS
+gui.Name = "AdvancedLockUI"
+gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 240, 0, 50)
+button.Size = UDim2.new(0, 260, 0, 50)
 button.Position = UDim2.new(0.05, 0, 0.45, 0)
 button.Text = "Tracking: OFF"
 button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.TextColor3 = Color3.fromRGB(255,255,255)
 button.Font = Enum.Font.SourceSansBold
 button.TextSize = 18
 button.Parent = gui
 
--- DRAGGING (PC + MOBILE)
+-- Right click to toggle Hard Lock
+button.MouseButton2Click:Connect(function()
+	hardLock = not hardLock
+	if hardLock then
+		button.Text = "Hard Lock Mode"
+	else
+		button.Text = tracking and "Tracking: ON" or "Tracking: OFF"
+	end
+end)
+
+-- DRAG (PC + MOBILE)
 local dragging = false
 local dragStart, startPos
-
-local function startDrag(input)
-	dragging = true
-	dragStart = input.Position
-	startPos = button.Position
-end
-
-local function stopDrag()
-	dragging = false
-end
 
 button.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1
 	or input.UserInputType == Enum.UserInputType.Touch then
-		startDrag(input)
+		dragging = true
+		dragStart = input.Position
+		startPos = button.Position
 	end
 end)
 
 button.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1
 	or input.UserInputType == Enum.UserInputType.Touch then
-		stopDrag()
+		dragging = false
 	end
 end)
 
@@ -69,15 +82,14 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- ESP HIGHLIGHT
+-- ESP
 local highlight = Instance.new("Highlight")
-highlight.FillColor = Color3.fromRGB(255, 0, 0)
-highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+highlight.FillColor = Color3.fromRGB(255,0,0)
 highlight.FillTransparency = 0.5
 highlight.Enabled = false
 highlight.Parent = gui
 
--- LINE OF SIGHT CHECK
+-- LOS
 local function hasLOS(targetRoot)
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
@@ -93,13 +105,12 @@ local function hasLOS(targetRoot)
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Blacklist
-	params.FilterDescendantsInstances = { myChar, targetRoot.Parent }
-	params.IgnoreWater = true
+	params.FilterDescendantsInstances = {myChar, targetRoot.Parent}
 
 	return Workspace:Raycast(origin, direction, params) == nil
 end
 
--- FIND NEAREST VISIBLE PLAYER
+-- Find nearest
 local function getNearestVisiblePlayer()
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
@@ -115,7 +126,6 @@ local function getNearestVisiblePlayer()
 			if char and char:FindFirstChild("HumanoidRootPart") then
 				local root = char.HumanoidRootPart
 				local dist = (root.Position - myPos).Magnitude
-
 				if dist < shortest and dist <= MAX_DISTANCE and hasLOS(root) then
 					shortest = dist
 					closest = root
@@ -127,23 +137,17 @@ local function getNearestVisiblePlayer()
 	return closest
 end
 
--- TRACKING STATE
-local tracking = false
-local lockedTarget = nil
-local losTimer = 0
-local connection
-local normalCameraType = camera.CameraType
-
--- TOGGLE BUTTON
+-- TOGGLE LOCK
 button.MouseButton1Click:Connect(function()
 	tracking = not tracking
 
 	if tracking then
 		button.Text = "Tracking: ON"
-		button.BackgroundColor3 = Color3.fromRGB(60, 200, 60)
+		button.BackgroundColor3 = Color3.fromRGB(60,200,60)
 		camera.CameraType = Enum.CameraType.Scriptable
 
 		connection = RunService.RenderStepped:Connect(function(dt)
+
 			if not lockedTarget then
 				lockedTarget = getNearestVisiblePlayer()
 				if lockedTarget then
@@ -158,21 +162,33 @@ button.MouseButton1Click:Connect(function()
 				losTimer = 0
 				highlight.Enabled = true
 
+				-- 🎯 PREDICTION
+				local predictedPosition = lockedTarget.Position
+				if lockedTarget.Parent:FindFirstChild("HumanoidRootPart") then
+					local velocity = lockedTarget.Velocity
+					predictedPosition += velocity * PREDICTION_STRENGTH
+				end
+
 				local camPos = camera.CFrame.Position
-				local desired = CFrame.new(camPos, lockedTarget.Position)
-				camera.CFrame = camera.CFrame:Lerp(desired, SMOOTHNESS)
+				local desired = CFrame.new(camPos, predictedPosition)
+
+				-- 🧲 LOCK STRENGTH
+				local strength = hardLock and HARD_LOCK_STRENGTH or SOFT_LOCK_STRENGTH
+				local alpha = 1 - math.exp(-strength * dt * 10)
+
+				camera.CFrame = camera.CFrame:Lerp(desired, alpha)
 			else
 				highlight.Enabled = false
 				losTimer += dt
-
 				if losTimer >= LOS_BREAK_TIME then
 					lockedTarget = nil
 				end
 			end
 		end)
+
 	else
 		button.Text = "no no"
-		button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+		button.BackgroundColor3 = Color3.fromRGB(200,60,60)
 
 		lockedTarget = nil
 		highlight.Enabled = false
