@@ -8,36 +8,27 @@ local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
 --// SETTINGS
-local MAX_DISTANCE = 300
-local LOS_BREAK_TIME = 2
-
-local PREDICTION_STRENGTH = 0.12
-local SOFT_LOCK_STRENGTH = 5
-local HARD_LOCK_STRENGTH = 12
+local MAX_DISTANCE = 250
+local SMOOTH_SPEED = 5
 
 --// STATE
-local tracking = false
-local hardLock = false
-local lockedTarget = nil
-local losTimer = 0
+local selectedTarget = nil
+local cinematicMode = false
 local connection
-local normalCameraType = camera.CameraType
 
---// UI CREATION
+--// UI SETUP
 local gui = Instance.new("ScreenGui")
 gui.Name = "PeilHubUI"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 350, 0, 300)
-mainFrame.Position = UDim2.new(0.5, -175, 0.5, -150)
-mainFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+mainFrame.Size = UDim2.new(0, 400, 0, 340)
+mainFrame.Position = UDim2.new(0.5, -200, 0.5, -170)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20,20,20)
 mainFrame.Parent = gui
 mainFrame.Active = true
-
-local corner = Instance.new("UICorner", mainFrame)
-corner.CornerRadius = UDim.new(0,12)
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0,12)
 
 -- Title
 local title = Instance.new("TextLabel")
@@ -49,191 +40,130 @@ title.TextScaled = true
 title.TextColor3 = Color3.fromRGB(0,255,120)
 title.Parent = mainFrame
 
--- Divider
-local divider = Instance.new("Frame")
-divider.Size = UDim2.new(1,-40,0,2)
-divider.Position = UDim2.new(0,20,0,60)
-divider.BackgroundColor3 = Color3.fromRGB(0,255,120)
-divider.Parent = mainFrame
-
 -- Button Creator
-local function createButton(text, yPos)
+local function createButton(text, y)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(1,-40,0,50)
-	btn.Position = UDim2.new(0,20,0,yPos)
+	btn.Position = UDim2.new(0,20,0,y)
 	btn.Text = text
 	btn.Font = Enum.Font.GothamBold
 	btn.TextSize = 18
-	btn.TextColor3 = Color3.fromRGB(255,255,255)
+	btn.TextColor3 = Color3.new(1,1,1)
 	btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
 	btn.Parent = mainFrame
 	Instance.new("UICorner", btn).CornerRadius = UDim.new(0,8)
 	return btn
 end
 
-local toggleLockBtn = createButton("Lock: OFF", 80)
-local hardLockBtn = createButton("Hard Lock: OFF", 150)
+local selectBtn = createButton("Select Nearest Player", 80)
+local cameraBtn = createButton("Cinematic Camera: OFF", 150)
 
---// DRAGGING
-local dragging, dragStart, startPos
+-- Target Info Panel
+local infoFrame = Instance.new("Frame")
+infoFrame.Size = UDim2.new(1,-40,0,100)
+infoFrame.Position = UDim2.new(0,20,0,230)
+infoFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+infoFrame.Parent = mainFrame
+Instance.new("UICorner", infoFrame).CornerRadius = UDim.new(0,8)
 
-mainFrame.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-	or input.UserInputType == Enum.UserInputType.Touch then
-		dragging = true
-		dragStart = input.Position
-		startPos = mainFrame.Position
-	end
-end)
+local nameLabel = Instance.new("TextLabel")
+nameLabel.Size = UDim2.new(1,0,0.5,0)
+nameLabel.BackgroundTransparency = 1
+nameLabel.Text = "Target: None"
+nameLabel.Font = Enum.Font.GothamBold
+nameLabel.TextScaled = true
+nameLabel.TextColor3 = Color3.new(1,1,1)
+nameLabel.Parent = infoFrame
 
-mainFrame.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-	or input.UserInputType == Enum.UserInputType.Touch then
-		dragging = false
-	end
-end)
+local healthLabel = Instance.new("TextLabel")
+healthLabel.Size = UDim2.new(1,0,0.5,0)
+healthLabel.Position = UDim2.new(0,0,0.5,0)
+healthLabel.BackgroundTransparency = 1
+healthLabel.Text = "Health: --"
+healthLabel.Font = Enum.Font.Gotham
+healthLabel.TextScaled = true
+healthLabel.TextColor3 = Color3.fromRGB(0,255,120)
+healthLabel.Parent = infoFrame
 
-UserInputService.InputChanged:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-	or input.UserInputType == Enum.UserInputType.Touch) then
-		local delta = input.Position - dragStart
-		mainFrame.Position = UDim2.new(
-			startPos.X.Scale,
-			startPos.X.Offset + delta.X,
-			startPos.Y.Scale,
-			startPos.Y.Offset + delta.Y
-		)
-	end
-end)
-
---// ESP
-local highlight = Instance.new("Highlight")
-highlight.FillColor = Color3.fromRGB(255,0,0)
-highlight.FillTransparency = 0.5
-highlight.Enabled = false
-highlight.Parent = gui
-
---// LINE OF SIGHT
-local function hasLOS(targetRoot)
+--// FIND NEAREST PLAYER
+local function getNearestPlayer()
 	local myChar = player.Character
-	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
-		return false
-	end
-
-	local origin = myChar.HumanoidRootPart.Position
-	local direction = targetRoot.Position - origin
-
-	if direction.Magnitude > MAX_DISTANCE then
-		return false
-	end
-
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Blacklist
-	params.FilterDescendantsInstances = {myChar, targetRoot.Parent}
-
-	return Workspace:Raycast(origin, direction, params) == nil
-end
-
---// FIND TARGET
-local function getNearestVisiblePlayer()
-	local myChar = player.Character
-	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
-		return nil
-	end
-
+	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+	
 	local myPos = myChar.HumanoidRootPart.Position
 	local closest, shortest = nil, math.huge
-
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr ~= player then
-			local char = plr.Character
-			if char and char:FindFirstChild("HumanoidRootPart") then
-				local root = char.HumanoidRootPart
-				local dist = (root.Position - myPos).Magnitude
-				if dist < shortest and dist <= MAX_DISTANCE and hasLOS(root) then
-					shortest = dist
-					closest = root
-				end
+	
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= player and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local root = plr.Character.HumanoidRootPart
+			local dist = (root.Position - myPos).Magnitude
+			
+			if dist < shortest and dist <= MAX_DISTANCE then
+				shortest = dist
+				closest = plr
 			end
 		end
 	end
-
+	
 	return closest
 end
 
---// LOCK SYSTEM
-local function startTracking()
-	camera.CameraType = Enum.CameraType.Scriptable
-
+--// SMOOTH CAMERA FOLLOW (NO AUTO AIM)
+local function startCinematic()
+	if connection then connection:Disconnect() end
+	
 	connection = RunService.RenderStepped:Connect(function(dt)
-
-		if not lockedTarget then
-			lockedTarget = getNearestVisiblePlayer()
-			if lockedTarget then
-				highlight.Adornee = lockedTarget.Parent
-				highlight.Enabled = true
-				losTimer = 0
-			end
-			return
-		end
-
-		if hasLOS(lockedTarget) then
-			losTimer = 0
-			highlight.Enabled = true
-
-			-- Prediction
-			local predicted = lockedTarget.Position + (lockedTarget.Velocity * PREDICTION_STRENGTH)
-
-			local camPos = camera.CFrame.Position
-			local desired = CFrame.new(camPos, predicted)
-
-			local strength = hardLock and HARD_LOCK_STRENGTH or SOFT_LOCK_STRENGTH
-			local alpha = 1 - math.exp(-strength * dt * 10)
-
-			camera.CFrame = camera.CFrame:Lerp(desired, alpha)
-		else
-			highlight.Enabled = false
-			losTimer += dt
-			if losTimer >= LOS_BREAK_TIME then
-				lockedTarget = nil
-			end
-		end
+		if not selectedTarget then return end
+		if not selectedTarget.Character then return end
+		
+		local root = selectedTarget.Character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+		
+		local offset = root.CFrame.LookVector * -8 + Vector3.new(0,4,0)
+		local desiredPos = root.Position + offset
+		
+		local desiredCF = CFrame.new(desiredPos, root.Position)
+		
+		local alpha = 1 - math.exp(-SMOOTH_SPEED * dt * 10)
+		camera.CFrame = camera.CFrame:Lerp(desiredCF, alpha)
 	end)
 end
 
-local function stopTracking()
-	if connection then
-		connection:Disconnect()
-		connection = nil
-	end
-	camera.CameraType = normalCameraType
-	lockedTarget = nil
-	highlight.Enabled = false
-	highlight.Adornee = nil
+local function stopCinematic()
+	if connection then connection:Disconnect() end
 end
 
 --// BUTTON EVENTS
-toggleLockBtn.MouseButton1Click:Connect(function()
-	tracking = not tracking
-
-	if tracking then
-		toggleLockBtn.Text = "Lock: ON"
-		toggleLockBtn.BackgroundColor3 = Color3.fromRGB(0,200,100)
-		startTracking()
+selectBtn.MouseButton1Click:Connect(function()
+	selectedTarget = getNearestPlayer()
+	
+	if selectedTarget then
+		nameLabel.Text = "Target: " .. selectedTarget.Name
+		
+		local humanoid = selectedTarget.Character:FindFirstChild("Humanoid")
+		if humanoid then
+			healthLabel.Text = "Health: " .. math.floor(humanoid.Health)
+			
+			humanoid.HealthChanged:Connect(function()
+				healthLabel.Text = "Health: " .. math.floor(humanoid.Health)
+			end)
+		end
 	else
-		toggleLockBtn.Text = "Lock: OFF"
-		toggleLockBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
-		stopTracking()
+		nameLabel.Text = "Target: None"
+		healthLabel.Text = "Health: --"
 	end
 end)
 
-hardLockBtn.MouseButton1Click:Connect(function()
-	hardLock = not hardLock
-	if hardLock then
-		hardLockBtn.Text = "Hard Lock: ON"
-		hardLockBtn.BackgroundColor3 = Color3.fromRGB(200,0,0)
+cameraBtn.MouseButton1Click:Connect(function()
+	cinematicMode = not cinematicMode
+	
+	if cinematicMode then
+		cameraBtn.Text = "Cinematic Camera: ON"
+		cameraBtn.BackgroundColor3 = Color3.fromRGB(0,170,255)
+		startCinematic()
 	else
-		hardLockBtn.Text = "Hard Lock: OFF"
-		hardLockBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+		cameraBtn.Text = "Cinematic Camera: OFF"
+		cameraBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+		stopCinematic()
 	end
 end)
