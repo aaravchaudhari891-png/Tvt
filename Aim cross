@@ -1,4 +1,4 @@
--- Services
+-- SERVICES
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -7,16 +7,19 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
--- Smoothness
+-- SETTINGS
+local MAX_DISTANCE = 300
+local LOS_BREAK_TIME = 2
 local SMOOTHNESS = 0.08
 
 -- UI
 local gui = Instance.new("ScreenGui")
-gui.Name = "LOSLockUI"
+gui.Name = "UltimateLockUI"
+gui.ResetOnSpawn = false -- UI NEVER DISAPPEARS
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 220, 0, 50)
+button.Size = UDim2.new(0, 240, 0, 50)
 button.Position = UDim2.new(0.05, 0, 0.45, 0)
 button.Text = "Tracking: OFF"
 button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
@@ -25,26 +28,37 @@ button.Font = Enum.Font.SourceSansBold
 button.TextSize = 18
 button.Parent = gui
 
--- Draggable button
+-- DRAGGING (PC + MOBILE)
 local dragging = false
 local dragStart, startPos
 
+local function startDrag(input)
+	dragging = true
+	dragStart = input.Position
+	startPos = button.Position
+end
+
+local function stopDrag()
+	dragging = false
+end
+
 button.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		dragging = true
-		dragStart = input.Position
-		startPos = button.Position
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+	or input.UserInputType == Enum.UserInputType.Touch then
+		startDrag(input)
 	end
 end)
 
 button.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		dragging = false
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+	or input.UserInputType == Enum.UserInputType.Touch then
+		stopDrag()
 	end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+	or input.UserInputType == Enum.UserInputType.Touch) then
 		local delta = input.Position - dragStart
 		button.Position = UDim2.new(
 			startPos.X.Scale,
@@ -55,8 +69,16 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- Line of sight check
-local function hasLineOfSight(targetRoot)
+-- ESP HIGHLIGHT
+local highlight = Instance.new("Highlight")
+highlight.FillColor = Color3.fromRGB(255, 0, 0)
+highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+highlight.FillTransparency = 0.5
+highlight.Enabled = false
+highlight.Parent = gui
+
+-- LINE OF SIGHT CHECK
+local function hasLOS(targetRoot)
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
 		return false
@@ -65,18 +87,19 @@ local function hasLineOfSight(targetRoot)
 	local origin = myChar.HumanoidRootPart.Position
 	local direction = targetRoot.Position - origin
 
+	if direction.Magnitude > MAX_DISTANCE then
+		return false
+	end
+
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Blacklist
-	params.FilterDescendantsInstances = {myChar, targetRoot.Parent}
+	params.FilterDescendantsInstances = { myChar, targetRoot.Parent }
 	params.IgnoreWater = true
 
-	local result = Workspace:Raycast(origin, direction, params)
-
-	-- If ray hits nothing, or directly hits the target, LOS is clear
-	return result == nil
+	return Workspace:Raycast(origin, direction, params) == nil
 end
 
--- Find nearest visible player
+-- FIND NEAREST VISIBLE PLAYER
 local function getNearestVisiblePlayer()
 	local myChar = player.Character
 	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
@@ -86,14 +109,14 @@ local function getNearestVisiblePlayer()
 	local myPos = myChar.HumanoidRootPart.Position
 	local closest, shortest = nil, math.huge
 
-	for _, plr in pairs(Players:GetPlayers()) do
+	for _, plr in ipairs(Players:GetPlayers()) do
 		if plr ~= player then
 			local char = plr.Character
 			if char and char:FindFirstChild("HumanoidRootPart") then
 				local root = char.HumanoidRootPart
 				local dist = (root.Position - myPos).Magnitude
 
-				if dist < shortest and hasLineOfSight(root) then
+				if dist < shortest and dist <= MAX_DISTANCE and hasLOS(root) then
 					shortest = dist
 					closest = root
 				end
@@ -104,44 +127,56 @@ local function getNearestVisiblePlayer()
 	return closest
 end
 
--- Tracking
+-- TRACKING STATE
 local tracking = false
 local lockedTarget = nil
+local losTimer = 0
 local connection
 local normalCameraType = camera.CameraType
 
+-- TOGGLE BUTTON
 button.MouseButton1Click:Connect(function()
 	tracking = not tracking
 
 	if tracking then
-		lockedTarget = getNearestVisiblePlayer()
-
-		if not lockedTarget then
-			button.Text = "No visible player"
-			tracking = false
-			return
-		end
-
 		button.Text = "Tracking: ON"
 		button.BackgroundColor3 = Color3.fromRGB(60, 200, 60)
 		camera.CameraType = Enum.CameraType.Scriptable
 
-		connection = RunService.RenderStepped:Connect(function()
-			if lockedTarget and lockedTarget.Parent then
-				-- Stop tracking if object blocks view
-				if not hasLineOfSight(lockedTarget) then
-					return
+		connection = RunService.RenderStepped:Connect(function(dt)
+			if not lockedTarget then
+				lockedTarget = getNearestVisiblePlayer()
+				if lockedTarget then
+					highlight.Adornee = lockedTarget.Parent
+					highlight.Enabled = true
+					losTimer = 0
 				end
+				return
+			end
+
+			if hasLOS(lockedTarget) then
+				losTimer = 0
+				highlight.Enabled = true
 
 				local camPos = camera.CFrame.Position
 				local desired = CFrame.new(camPos, lockedTarget.Position)
 				camera.CFrame = camera.CFrame:Lerp(desired, SMOOTHNESS)
+			else
+				highlight.Enabled = false
+				losTimer += dt
+
+				if losTimer >= LOS_BREAK_TIME then
+					lockedTarget = nil
+				end
 			end
 		end)
 	else
 		button.Text = "no no"
 		button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+
 		lockedTarget = nil
+		highlight.Enabled = false
+		highlight.Adornee = nil
 
 		if connection then
 			connection:Disconnect()
