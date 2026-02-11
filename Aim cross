@@ -1,57 +1,88 @@
--- Services
+-- SERVICES
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- ===== UI SETUP =====
+-- SETTINGS
+local TRACK_RANGE = 300 -- studs
+local SMOOTHNESS = 0.15 -- lower = smoother
+
+-- STATE
+local trackingEnabled = false
+local targetCharacter = nil
+
+-- ===== UI =====
 local gui = Instance.new("ScreenGui")
-gui.Name = "MobileCrosshairGui"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- Crosshair
-local crosshair = Instance.new("Frame")
-crosshair.Size = UDim2.new(0, 8, 0, 8)
-crosshair.Position = UDim2.new(0.5, -4, 0.5, -4)
-crosshair.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-crosshair.BorderSizePixel = 0
-crosshair.AnchorPoint = Vector2.new(0, 0)
-crosshair.Parent = gui
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0, 140, 0, 50)
+button.Position = UDim2.new(0, 20, 1, -80)
+button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.Text = "Tracking: OFF"
+button.TextScaled = true
+button.BorderSizePixel = 0
+button.Parent = gui
 
--- ===== HIGHLIGHT =====
-local highlight = Instance.new("Highlight")
-highlight.FillColor = Color3.fromRGB(255, 50, 50)
-highlight.FillTransparency = 0.45
-highlight.OutlineTransparency = 1
-highlight.Enabled = false
-highlight.Parent = gui
+button.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", button)
 
--- ===== TRACKING (MOBILE SAFE) =====
-RunService.RenderStepped:Connect(function()
-	local centerX = camera.ViewportSize.X / 2
-	local centerY = camera.ViewportSize.Y / 2
+-- ===== FIND NEAREST PLAYER =====
+local function getNearestPlayer()
+	local closest = nil
+	local shortest = TRACK_RANGE
 
-	local ray = camera:ViewportPointToRay(centerX, centerY)
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= player and plr.Character then
+			local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+			local humanoid = plr.Character:FindFirstChildOfClass("Humanoid")
 
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Blacklist
-	params.FilterDescendantsInstances = {player.Character}
-
-	local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
-
-	if result then
-		local model = result.Instance:FindFirstAncestorOfClass("Model")
-		local humanoid = model and model:FindFirstChildOfClass("Humanoid")
-
-		if humanoid and model ~= player.Character then
-			highlight.Adornee = model
-			highlight.Enabled = true
-		else
-			highlight.Enabled = false
+			if hrp and humanoid and humanoid.Health > 0 then
+				local distance = (hrp.Position - camera.CFrame.Position).Magnitude
+				if distance < shortest then
+					shortest = distance
+					closest = plr.Character
+				end
+			end
 		end
+	end
+
+	return closest
+end
+
+-- ===== BUTTON TOGGLE =====
+button.Activated:Connect(function()
+	trackingEnabled = not trackingEnabled
+
+	if trackingEnabled then
+		button.Text = "Tracking: ON"
+		button.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
 	else
-		highlight.Enabled = false
+		button.Text = "Tracking: OFF"
+		button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+		targetCharacter = nil
+	end
+end)
+
+-- ===== CAMERA TRACKING =====
+RunService.RenderStepped:Connect(function()
+	if not trackingEnabled then return end
+
+	if not targetCharacter or not targetCharacter.Parent then
+		targetCharacter = getNearestPlayer()
+	end
+
+	if targetCharacter then
+		local hrp = targetCharacter:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			local current = camera.CFrame
+			local targetCF = CFrame.new(camera.CFrame.Position, hrp.Position)
+
+			camera.CFrame = current:Lerp(targetCF, SMOOTHNESS)
+		end
 	end
 end)
